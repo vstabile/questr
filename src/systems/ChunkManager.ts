@@ -6,11 +6,11 @@ export class ChunkManager {
   private scene: Phaser.Scene;
   private tileSize: number;
   private nostrService: NostrService;
-  private tileset: Phaser.Tilemaps.Tileset | null;
   private map: Phaser.Tilemaps.Tilemap;
+  private tilesets: Map<string, Phaser.Tilemaps.Tileset>;
+  private layers: Map<string, Phaser.Tilemaps.TilemapLayer>;
   private loadDistance: number;
   private player: Player;
-  private layers: Map<string, Phaser.Tilemaps.TilemapLayer>;
   private lastPlayerChunkX: number = 0;
   private lastPlayerChunkY: number = 0;
   private chunkWidth: number = 16;
@@ -20,68 +20,100 @@ export class ChunkManager {
     scene: Phaser.Scene,
     tileSize: number,
     player: Player,
+    tilesetConfig: {
+      name: string;
+      imageKey: string;
+      tileWidth: number;
+      tileHeight: number;
+      margin: number;
+      spacing: number;
+      firstgid: number;
+      tileProperties: Record<number, Record<string, boolean>>;
+    },
     loadDistance: number = 1
   ) {
     this.scene = scene;
     this.tileSize = tileSize;
-    this.layers = new Map<string, Phaser.Tilemaps.TilemapLayer>();
-    this.loadDistance = loadDistance;
     this.player = player;
+    this.loadDistance = loadDistance;
     this.nostrService = NostrService.getInstance();
+    this.tilesets = new Map();
+    this.layers = new Map();
 
-    // Create the tilemap
+    // Create the base tilemap
     this.map = scene.make.tilemap({
-      tileWidth: 32,
-      tileHeight: 32,
+      tileWidth: tileSize,
+      tileHeight: tileSize,
       width: 1000,
       height: 1000,
     });
 
-    this.tileset = this.map.addTilesetImage("tiles", "tiles", 32, 32, 1, 2, 1);
+    // Initialize with tileset
+    this.initializeTileset(tilesetConfig);
 
-    if (!this.tileset) {
-      console.error("Failed to load tilesets");
+    this.nostrService.addChunkEventListener(this.handleChunkUpdate.bind(this));
+  }
+
+  private initializeTileset(config: {
+    name: string;
+    imageKey: string;
+    tileWidth: number;
+    tileHeight: number;
+    margin: number;
+    spacing: number;
+    firstgid: number;
+    tileProperties: Record<number, Record<string, boolean>>;
+  }): void {
+    const tileset = this.map.addTilesetImage(
+      config.name,
+      config.imageKey,
+      config.tileWidth,
+      config.tileHeight,
+      config.margin,
+      config.spacing,
+      config.firstgid
+    );
+
+    if (!tileset) {
+      console.error(`Failed to add tileset: ${config.name}`);
       return;
     }
 
-    const belowLayer = this.map.createBlankLayer(
-      "Below Player",
-      this.tileset,
-      0,
-      0,
-      112,
-      128
-    );
-    const worldLayer = this.map.createBlankLayer(
-      "World",
-      this.tileset,
-      0,
-      0,
-      96,
-      80
-    );
-    const aboveLayer = this.map.createBlankLayer(
-      "Above Player",
-      this.tileset,
-      0,
-      0,
-      48,
-      80
-    );
+    this.tilesets.set(config.name, tileset);
+    this.createLayers(tileset);
+
+    // Set up collision properties for the World layer
+    const worldLayer = this.layers.get("World");
+    if (worldLayer) {
+      // Set collisions based on tile properties
+      Object.entries(config.tileProperties).forEach(([tileId, properties]) => {
+        if (properties.collides) {
+          // Add firstgid to the tile ID since the properties are stored with local IDs
+          const globalTileId = parseInt(tileId) + config.firstgid;
+          worldLayer.setCollision(globalTileId);
+        }
+      });
+
+      // Add the collider
+      this.scene.physics.add.collider(this.player, worldLayer);
+    }
+  }
+
+  private createLayers(tileset: Phaser.Tilemaps.Tileset): void {
+    const belowLayer = this.map.createBlankLayer("Below Player", tileset, 0, 0);
+    const worldLayer = this.map.createBlankLayer("World", tileset, 0, 0);
+    const aboveLayer = this.map.createBlankLayer("Above Player", tileset, 0, 0);
 
     if (!belowLayer || !worldLayer || !aboveLayer) {
       console.error("Failed to create layers");
       return;
     }
 
-    // worldLayer.setCollisionByProperty({ collides: true });
     aboveLayer.setDepth(10);
 
     this.layers.set("Below Player", belowLayer);
     this.layers.set("World", worldLayer);
     this.layers.set("Above Player", aboveLayer);
-
-    this.nostrService.addChunkEventListener(this.handleChunkUpdate.bind(this));
   }
 
   private handleChunkUpdate(event: any): void {
@@ -99,9 +131,15 @@ export class ChunkManager {
       return;
     }
 
-    layer.putTilesAt(tiles, x, y);
+    const tiles2D = [];
+    for (let i = 0; i < 16; i++) {
+      const row = tiles
+        .slice(i * 16, (i + 1) * 16)
+        .map((tile) => (tile === 0 ? -1 : tile));
+      tiles2D.push(row);
+    }
 
-    console.log("Chunk update", layerName, x, y, tiles);
+    layer.putTilesAt(tiles2D, x, y);
   }
 
   // Get chunk coordinates from world position
@@ -136,8 +174,6 @@ export class ChunkManager {
 
   // Update chunks around the player
   private updateChunks(playerChunkX: number, playerChunkY: number): void {
-    console.log("playerChunk", playerChunkX, playerChunkY);
-
     const chunksToKeep = new Set<string>();
 
     // Determine which chunks should be loaded
@@ -151,7 +187,6 @@ export class ChunkManager {
       }
     }
 
-    console.log("chunksToKeep", chunksToKeep);
     this.nostrService.fetchChunkEvents(Array.from(chunksToKeep));
   }
 }

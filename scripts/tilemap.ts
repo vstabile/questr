@@ -9,11 +9,11 @@ import WebSocket from "ws";
 (global as any).WebSocket = WebSocket;
 
 const relays = [
-  "ws://localhost:8080",
-  // "wss://relay.damus.io",
-  // "wss://nos.lol",
-  // "wss://relay.nostr.band",
-  // "wss://nostr-pub.wellorder.net",
+  // "ws://localhost:8080",
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.nostr.band",
+  "wss://nostr-pub.wellorder.net",
   // "wss://relay.snort.social",
 ];
 

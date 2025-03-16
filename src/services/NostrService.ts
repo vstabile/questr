@@ -9,7 +9,6 @@ import {
 } from "rx-nostr";
 import { verifier } from "rx-nostr-crypto";
 import { filter } from "rxjs";
-import { EventStore } from "applesauce-core";
 import { getPublicKey, finalizeEvent, nip19 } from "nostr-tools";
 
 export interface NostrProfile {
@@ -30,7 +29,6 @@ export class NostrService {
   private isConnected: boolean = false;
   private connectionListeners: ((pubkey: string | null) => void)[] = [];
   private profileListeners: ((profile: NostrProfile | null) => void)[] = [];
-  private eventStore: EventStore;
 
   // Add a property to store followed pubkeys
   private followedPubkeys: string[] = [];
@@ -47,11 +45,11 @@ export class NostrService {
   // Add a Set to track processed event IDs at the class level
   private processedEventIds: Set<string> = new Set();
 
+  // Add a new property for tileset event listeners
+  private tilesetEventListeners: ((event: any) => void)[] = [];
+
   // Singleton pattern
   private constructor() {
-    this.eventStore = new EventStore();
-
-    // Initialize the service
     this.initialize();
   }
 
@@ -74,16 +72,8 @@ export class NostrService {
         "wss://nos.lol",
         "wss://relay.nostr.band",
         "wss://nostr-pub.wellorder.net",
-        "wss://relay.snort.social",
+        // "wss://relay.snort.social",
       ]);
-
-      const rxReq = createRxForwardReq();
-
-      // Define a listener.
-      this.rxNostr.use(rxReq).subscribe(({ event }) => {
-        console.log("Added", event);
-        this.eventStore.add(event);
-      });
 
       // Set up periodic cleanup of old event IDs
       setInterval(() => {
@@ -180,8 +170,6 @@ export class NostrService {
     if (!this.rxNostr || !this.pubkey) return;
 
     try {
-      console.log("Fetching follow list for pubkey:", this.pubkey);
-
       // Create a request for kind 3 (contacts/following) events
       const req = createRxOneshotReq({
         filters: [{ kinds: [3], authors: [this.pubkey] }],
@@ -207,7 +195,6 @@ export class NostrService {
                   .map((tag) => tag[1]);
 
                 this.followedPubkeys = followList;
-                console.log(`Fetched ${followList.length} followed pubkeys`);
 
                 // After getting the follow list, subscribe to their location events
                 this.subscribeToFollowedUsersLocations();
@@ -230,8 +217,6 @@ export class NostrService {
     if (!this.rxNostr) return;
 
     try {
-      console.log("Subscribing to location events from followed users");
-
       const req = createRxForwardReq();
 
       this.rxNostr
@@ -502,8 +487,6 @@ export class NostrService {
     }
 
     try {
-      console.log("Fetching all location events...");
-
       // Create a one-shot request for all kind 31111 events with d tag "test"
       const req = createRxOneshotReq({
         filters: [
@@ -544,7 +527,6 @@ export class NostrService {
               resolve(); // Resolve even on error to not block game loading
             },
             complete: () => {
-              console.log(`Fetched ${eventCount} initial location events`);
               resolve(); // Resolve when complete
             },
           });
@@ -564,8 +546,6 @@ export class NostrService {
     }
 
     try {
-      console.log("Fetching tilemap chunk events...");
-
       const req = createRxOneshotReq({
         filters: [
           {
@@ -610,13 +590,87 @@ export class NostrService {
               resolve(); // Resolve even on error to not block game loading
             },
             complete: () => {
-              console.log(`Fetched ${eventCount} chunk events`);
               resolve(); // Resolve when complete
             },
           });
       });
     } catch (error) {
       console.error("Error in fetchChunkEvents:", error);
+    }
+  }
+
+  // Add methods to manage tileset event listeners
+  public addTilesetEventListener(listener: (event: any) => void): void {
+    this.tilesetEventListeners.push(listener);
+  }
+
+  public removeTilesetEventListener(listener: (event: any) => void): void {
+    this.tilesetEventListeners = this.tilesetEventListeners.filter(
+      (l) => l !== listener
+    );
+  }
+
+  private notifyTilesetEventListeners(event: any): void {
+    this.tilesetEventListeners.forEach((listener) => listener(event));
+  }
+
+  public async fetchTilesetEvents(): Promise<void> {
+    const tilesetEventType = 31113;
+
+    if (!this.rxNostr) {
+      console.error("RxNostr not initialized");
+      return;
+    }
+
+    try {
+      const req = createRxOneshotReq({
+        filters: [
+          {
+            kinds: [tilesetEventType],
+            "#d": ["test:tileset:tuxmon-sample-32px-extruded"],
+          },
+        ],
+      });
+
+      // Return a promise that resolves when events are fetched
+      return new Promise((resolve) => {
+        let eventCount = 0;
+
+        // Subscribe to events
+        this.rxNostr!.use(req)
+          .pipe(
+            filter(
+              (packet) =>
+                packet.type === "EVENT" &&
+                packet.event?.kind === tilesetEventType
+            )
+          )
+          .subscribe({
+            next: (packet) => {
+              if (
+                packet.type === "EVENT" &&
+                packet.event?.kind === tilesetEventType
+              ) {
+                try {
+                  const event = packet.event;
+                  eventCount++;
+                  this.notifyTilesetEventListeners(event);
+                } catch (error) {
+                  console.error("Error processing tileset event:", error);
+                }
+              }
+            },
+            error: (error) => {
+              console.error("Error fetching tileset events:", error);
+              resolve(); // Resolve even on error to not block game loading
+            },
+            complete: () => {
+              resolve(); // Resolve when complete
+            },
+          });
+      });
+    } catch (error) {
+      console.error("Error in fetchTilesetEvents:", error);
     }
   }
 }

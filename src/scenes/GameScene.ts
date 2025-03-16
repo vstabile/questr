@@ -69,7 +69,7 @@ export class GameScene extends Phaser.Scene {
     loadingScreen.setDepth(999999); // Ensure it's on top
     loadingScreen.setAlpha(1);
 
-    // Create a promise that resolves when locationInitialized becomes true
+    // Create promises for initialization
     const locationPromise = new Promise<void>((resolve) => {
       const checkInterval = setInterval(() => {
         if (this.locationInitialized) {
@@ -81,13 +81,59 @@ export class GameScene extends Phaser.Scene {
       }, 100);
     });
 
-    // Create a timeout promise
-    const timeoutPromise = new Promise<void>((resolve) => {
-      setTimeout(resolve, 3000);
+    // Get tileset configuration first
+    const tilesetPromise = new Promise<void>((resolve) => {
+      this.nostrService.fetchTilesetEvents();
+      this.nostrService.addTilesetEventListener((event) => {
+        try {
+          const tags = event.tags;
+          const name = tags.find((tag: string[]) => tag[0] === "name")?.[1];
+          const firstgid = parseInt(
+            tags.find((tag: string[]) => tag[0] === "firstgid")?.[1]
+          );
+          const margin = parseInt(
+            tags.find((tag: string[]) => tag[0] === "margin")?.[1]
+          );
+          const spacing = parseInt(
+            tags.find((tag: string[]) => tag[0] === "spacing")?.[1]
+          );
+          const tilewidth = parseInt(
+            tags.find((tag: string[]) => tag[0] === "tilewidth")?.[1]
+          );
+          const tileheight = parseInt(
+            tags.find((tag: string[]) => tag[0] === "tileheight")?.[1]
+          );
+
+          // Parse tile properties from event content
+          const tileProperties = JSON.parse(event.content);
+
+          // Initialize ChunkManager with tileset config including tile properties
+          this.chunkManager = new ChunkManager(
+            this,
+            32, // tile size
+            this.player,
+            {
+              name,
+              imageKey: "tiles", // from preload
+              tileWidth: tilewidth,
+              tileHeight: tileheight,
+              margin,
+              spacing,
+              firstgid,
+              tileProperties, // Pass the tile properties
+            }
+          );
+
+          resolve();
+        } catch (error) {
+          console.error("Error handling tileset event:", error);
+          resolve(); // Resolve anyway to not block the game
+        }
+      });
     });
 
-    // Wait for either condition
-    Promise.race([locationPromise, timeoutPromise]).then(() => {
+    // Wait for all conditions
+    Promise.all([locationPromise, tilesetPromise]).then(() => {
       // Set up camera to follow player
       this.cameras.main.startFollow(this.player);
       this.cameras.main.setZoom(1);
@@ -95,7 +141,7 @@ export class GameScene extends Phaser.Scene {
       loadingScreen.destroy();
     });
 
-    // Subscribe to location events
+    // Subscribe to location and tileset events
     this.nostrService.addLocationEventListener(
       this.handleLocationEvent.bind(this)
     );
@@ -129,18 +175,6 @@ export class GameScene extends Phaser.Scene {
       // Add player to the scene
       this.add.existing(this.player);
 
-      // this.physics.add.collider(this.player, worldLayer);
-
-      // Initialize the chunk manager
-      this.chunkManager = new ChunkManager(
-        this,
-        32, // tile size
-        this.player
-      );
-
-      // Initial chunk loading
-      this.chunkManager.update();
-
       // Update debug text with player position
       this.events.on("update", () => {
         if (this.player && this.chunkManager) {
@@ -156,8 +190,6 @@ export class GameScene extends Phaser.Scene {
 
       // Fetch all existing location events to initialize other players
       this.nostrService.fetchAllLocationEvents();
-
-      console.log("Initial location events loaded");
 
       // Set up position update timer to publish Nostr events
       this.lastPublishedPosition = {
@@ -295,7 +327,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(): void {
-    // Update the chunk manager to load/unload chunks
     if (this.chunkManager) {
       this.chunkManager.update();
     }

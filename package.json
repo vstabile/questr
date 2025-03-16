@@ -8,14 +8,15 @@
     "start": "webpack serve --open",
     "dev": "webpack serve --mode development --devtool inline-source-map --hot --open",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "tilemap": "node --loader ts-node/esm scripts/tilemap.ts"
+    "tilemap": "node --loader ts-node/esm scripts/tilemap.ts",
+    "tilesets": "node --loader ts-node/esm scripts/tilesets.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "applesauce-core": "^0.11.0",
+    "nostr-tools": "^2.11.0",
     "phaser": "^3.88.2",
     "rx-nostr": "^3.5.0",
     "rx-nostr-crypto": "^3.1.3",
