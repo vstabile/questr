@@ -11,6 +11,19 @@ import { verifier } from "rx-nostr-crypto";
 import { filter } from "rxjs";
 import { getPublicKey, finalizeEvent, nip19 } from "nostr-tools";
 
+const defaultRelays = [
+  // "ws://localhost:8080",
+  "wss://relay.kartapio.com",
+];
+
+const profileRelays = [
+  "wss://purplepag.es",
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.nostr.band",
+  "wss://nostr-pub.wellorder.net",
+];
+
 export interface NostrProfile {
   pubkey: string;
   name?: string;
@@ -23,6 +36,7 @@ export interface NostrProfile {
 export class NostrService {
   private static instance: NostrService;
   private rxNostr: RxNostr | null = null;
+  private rxNostrProfile: RxNostr | null = null;
   private privateKey: Uint8Array | null = null;
   private pubkey: string | null = null;
   private profile: NostrProfile | null = null;
@@ -62,18 +76,13 @@ export class NostrService {
 
   private async initialize(): Promise<void> {
     try {
-      // Create rx-nostr instance
+      // Create main rx-nostr instance
       this.rxNostr = createRxNostr({ verifier });
+      this.rxNostr.setDefaultRelays(defaultRelays);
 
-      // Connect to multiple relays for redundancy
-      this.rxNostr.setDefaultRelays([
-        // "ws://localhost:8080",
-        "wss://relay.damus.io",
-        "wss://nos.lol",
-        "wss://relay.nostr.band",
-        "wss://nostr-pub.wellorder.net",
-        // "wss://relay.snort.social",
-      ]);
+      // Create separate rx-nostr instance for profiles
+      this.rxNostrProfile = createRxNostr({ verifier });
+      this.rxNostrProfile.setDefaultRelays(profileRelays);
 
       // Set up periodic cleanup of old event IDs
       setInterval(() => {
@@ -123,16 +132,15 @@ export class NostrService {
   }
 
   private async fetchProfile(): Promise<void> {
-    if (!this.rxNostr || !this.pubkey) return;
+    if (!this.rxNostrProfile || !this.pubkey) return;
 
     try {
-      // Create a request for kind 0 (metadata) events
       const req = createRxOneshotReq({
         filters: [{ kinds: [0], authors: [this.pubkey] }],
       });
 
-      // Subscribe to events
-      this.rxNostr
+      // Subscribe to events using profile-specific instance
+      this.rxNostrProfile
         .use(req)
         .pipe(
           filter(
@@ -145,11 +153,9 @@ export class NostrService {
           next: (packet) => {
             if (packet.type === "EVENT" && packet.event?.kind === 0) {
               try {
-                // Parse the content as JSON
                 const content = JSON.parse(packet.event.content);
                 this.profile = content as NostrProfile;
                 this.profile.pubkey = this.pubkey!;
-
                 this.notifyProfileListeners(this.profile);
               } catch (error) {
                 console.error("Error parsing profile:", error);
@@ -384,6 +390,10 @@ export class NostrService {
       this.rxNostr.dispose();
       this.rxNostr = null;
     }
+    if (this.rxNostrProfile) {
+      this.rxNostrProfile.dispose();
+      this.rxNostrProfile = null;
+    }
     this.isConnected = false;
     this.pubkey = null;
     this.profile = null;
@@ -391,22 +401,20 @@ export class NostrService {
 
   // Add this method to fetch and get profiles by pubkey
   public getProfileByPubkey(pubkey: string): NostrProfile | null {
-    // Return from cache if available
     if (this.profilesByPubkey.has(pubkey)) {
       return this.profilesByPubkey.get(pubkey) || null;
     }
 
-    // Otherwise fetch the profile
-    if (!this.rxNostr) return null;
+    if (!this.rxNostrProfile) return null;
 
     try {
-      // Create a request for kind 0 (metadata) events
       const req = createRxOneshotReq({
         filters: [{ kinds: [0], authors: [pubkey] }],
       });
 
-      // Subscribe to events
-      this.rxNostr!.use(req)
+      // Use profile-specific instance
+      this.rxNostrProfile
+        .use(req)
         .pipe(
           filter(
             (packet) => packet.type === "EVENT" && packet.event?.kind === 0
@@ -418,14 +426,10 @@ export class NostrService {
           next: (packet) => {
             if (packet.type === "EVENT" && packet.event?.kind === 0) {
               try {
-                // Parse the content as JSON
                 const content = JSON.parse(packet.event.content);
                 const profile = content as NostrProfile;
                 profile.pubkey = pubkey;
-
-                // Cache the profile
                 this.profilesByPubkey.set(pubkey, profile);
-
                 this.notifyProfileListeners(profile);
               } catch (error) {
                 console.error("Error parsing profile:", error);
